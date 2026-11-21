@@ -46,19 +46,50 @@ def json3_segments(data,duration):
     return cleaned
 
 def download_youtube(url,folder,language='en'):
+    import logging
+    logger=logging.getLogger('remixora.youtube')
     url=canonical_youtube_url(url);folder=Path(folder).resolve();folder.mkdir(parents=True,exist_ok=True)
+    timeout_sec=int(os.getenv('YTDLP_TIMEOUT_SECONDS','600'))
     try:
-        result=subprocess.run([sys.executable,'-m','app.youtube_worker',url,str(folder),language],capture_output=True,text=True,timeout=600)
-    except subprocess.TimeoutExpired:raise ValueError('YouTube import timed out. Try again or upload your original file.')
+        result=subprocess.run([sys.executable,'-m','app.youtube_worker',url,str(folder),language],capture_output=True,text=True,timeout=timeout_sec)
+    except subprocess.TimeoutExpired:
+        logger.error("[YouTube import] Worker process timed out after %ds for %s", timeout_sec, url)
+        raise ValueError('YouTube import timed out. Try again or upload your original file.')
     if result.returncode or not (folder/'result.json').is_file():
-        if (folder/'error.json').is_file():raise ValueError(json.loads((folder/'error.json').read_text())['error'])
-        raise ValueError('YouTube import could not run. Check yt-dlp, Node.js, FFmpeg and your connection in System Health.')
+        err_msg=''
+        if (folder/'error.json').is_file():
+            try:
+                err_data=json.loads((folder/'error.json').read_text(encoding='utf-8'))
+                err_msg=err_data.get('error','')
+            except Exception:pass
+        if result.stderr:
+            logger.error("[YouTube import] Worker stderr: %s", result.stderr.strip())
+        if not err_msg and result.stderr:
+            err_msg=safe_download_error(result.stderr)
+        if not err_msg:
+            err_msg='YouTube import could not run. Check yt-dlp, Node.js, FFmpeg and your connection in System Health.'
+        raise ValueError(err_msg)
     return json.loads((folder/'result.json').read_text(encoding='utf-8'))
 
 def safe_download_error(error):
     message=str(error).lower()
-    if 'duration limit' in message:return 'This video exceeds the configured duration limit. Upload a shorter source.'
-    if 'size limit' in message or 'filesize' in message:return 'This download exceeds the configured media size limit. Upload a smaller source.'
-    if any(x in message for x in ['sign in','bot','403','429','private','unavailable','age','members','premium']):
-        return 'YouTube restricted this video or request. Use a publicly accessible video you may repurpose, or upload your original file. No cookies or access bypass are used.'
-    return 'YouTube could not provide this media. Check connectivity, update yt-dlp, or upload your original file.'
+    has_proxy=bool((os.getenv('YTDLP_PROXY') or os.getenv('HTTPS_PROXY') or os.getenv('HTTP_PROXY') or '').strip())
+    if 'duration limit' in message:
+        return 'This video exceeds the configured duration limit. Upload a shorter source or adjust MAX_DURATION_SECONDS.'
+    if 'size limit' in message or 'filesize' in message:
+        return 'This download exceeds the configured media size limit. Upload a smaller source or adjust MAX_UPLOAD_MB.'
+    if any(p in message for p in ['proxy', 'tunnel', 'socks', 'cannot connect to proxy', 'proxyerror']):
+        return 'Proxy connection failed while contacting YouTube. Check your YTDLP_PROXY URL or upload your original file.'
+    if any(x in message for x in ['private', 'unavailable']) and not any(k in message for k in ['bot', 'sign in']):
+        return 'This YouTube video is private or unavailable. Use a publicly accessible video you may repurpose, or upload your original file.'
+    if any(x in message for x in ['age', 'members', 'premium']):
+        return 'This YouTube video requires account sign-in (age or member restricted). Upload your original file.'
+    if any(x in message for x in ['sign in', 'bot', '403', '429', 'captcha', 'challenge']):
+        if has_proxy:
+            return 'YouTube restricted this video or proxy IP. Verify your YTDLP_PROXY setting, or upload your original file.'
+        return 'YouTube restricted this server IP (bot check/403). Configure YTDLP_PROXY on Railway or upload your original file. No cookies or access bypass are used.'
+    if 'timeout' in message or 'timed out' in message:
+        return 'YouTube connection timed out. Check network or set YTDLP_PROXY on Railway, or upload your original file.'
+    if 'ffmpeg' in message:
+        return 'FFmpeg is required to process this video format. Verify server FFmpeg or upload your original file.'
+    return 'YouTube could not provide this media. Check connectivity, configure YTDLP_PROXY on Railway, or upload your original file.'

@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certi
 WORKDIR /app
 COPY requirements.txt requirements-transcription.txt ./
 ARG WITH_WHISPER=0
-RUN pip install --no-cache-dir -r requirements.txt && if [ "$WITH_WHISPER" = "1" ]; then pip install --no-cache-dir -r requirements-transcription.txt; fi
+RUN pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir -U yt-dlp && if [ "$WITH_WHISPER" = "1" ]; then pip install --no-cache-dir -r requirements-transcription.txt; fi
 COPY app ./app
 COPY scripts ./scripts
 RUN mkdir -p /data && useradd --uid 10001 --create-home remixora && chown -R remixora:remixora /data /app

@@ -143,8 +143,15 @@ async def protect(request:Request,call_next):
             if not allowed:return Response(status_code=401,headers={'WWW-Authenticate':'Basic realm="Remixora Studio"'})
         if request.method not in {'GET','HEAD','OPTIONS'}:
             origin=request.headers.get('origin')
-            if origin and origin.rstrip('/') not in {str(request.base_url).rstrip('/'),os.getenv('PUBLIC_ORIGIN','').rstrip('/')}:
-                return JSONResponse({'detail':'Cross-origin writes are not allowed'},status_code=403)
+            if origin:
+                public_origins={o.strip().rstrip('/').lower() for o in os.getenv('PUBLIC_ORIGIN','').split(',') if o.strip()}
+                allowed_origins={str(request.base_url).rstrip('/').lower(),*public_origins}
+                f_host=request.headers.get('x-forwarded-host')
+                if f_host:
+                    f_proto=request.headers.get('x-forwarded-proto','https')
+                    allowed_origins.add(f"{f_proto}://{f_host}".rstrip('/').lower())
+                if origin.rstrip('/').lower() not in allowed_origins:
+                    return JSONResponse({'detail':'Cross-origin writes are not allowed'},status_code=403)
             if request.headers.get('sec-fetch-site')=='cross-site':return JSONResponse({'detail':'Cross-site request rejected'},status_code=403)
             bucket=attempts[request.client.host if request.client else 'local'];now=time.monotonic()
             while bucket and bucket[0]<now-60:bucket.popleft()
